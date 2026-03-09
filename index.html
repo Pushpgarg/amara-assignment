@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Proctor — Phase 0</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <h1><span>AI</span> Proctor — Phase 0</h1>
+
+  <div class="container">
+    <!-- Left: camera feed -->
+    <div class="video-panel">
+      <header>Live Camera Feed</header>
+      <video id="cam" autoplay playsinline muted></video>
+    </div>
+
+    <!-- Right: sidebar -->
+    <div class="sidebar">
+      <!-- Connection status -->
+      <div class="card" style="padding:.75rem 1.25rem">
+        <div class="status-badge">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">Disconnected</span>
+        </div>
+      </div>
+
+      <!-- Risk score gauge -->
+      <div class="card">
+        <h2>Risk Score</h2>
+        <div class="gauge-wrap">
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" width="120" height="120">
+              <circle class="track" cx="60" cy="60" r="50" />
+              <circle class="fill" id="gaugeFill" cx="60" cy="60" r="50"
+                stroke-dasharray="314.16"
+                stroke-dashoffset="314.16" />
+            </svg>
+            <span class="gauge-value" id="riskValue">0</span>
+          </div>
+          <span class="gauge-label">Low Risk</span>
+        </div>
+      </div>
+
+      <!-- Event log -->
+      <div class="card" style="flex:1">
+        <h2>Event Log</h2>
+        <div class="log-box" id="logBox"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

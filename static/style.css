@@ -1,0 +1,140 @@
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #0f1117;
+  color: #e4e4e7;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+  font-weight: 600;
+  margin-bottom: 1.5rem;
+  letter-spacing: -0.02em;
+}
+h1 span { color: #6366f1; }
+
+.container {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 960px;
+}
+
+/* ---- Video ---- */
+.video-panel {
+  background: #1a1b23;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #27272a;
+  display: flex;
+  flex-direction: column;
+}
+.video-panel header {
+  padding: .75rem 1rem;
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #a1a1aa;
+  border-bottom: 1px solid #27272a;
+}
+video {
+  width: 100%;
+  aspect-ratio: 4/3;
+  background: #000;
+  display: block;
+}
+
+/* ---- Sidebar ---- */
+.sidebar { display: flex; flex-direction: column; gap: 1.5rem; }
+
+.card {
+  background: #1a1b23;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+.card h2 {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #a1a1aa;
+  margin-bottom: 1rem;
+}
+
+/* ---- Risk gauge ---- */
+.gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+.gauge {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+.gauge svg { transform: rotate(-90deg); }
+.gauge circle {
+  fill: none;
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+.gauge .track { stroke: #27272a; }
+.gauge .fill  { stroke: #22c55e; transition: stroke-dashoffset .4s ease, stroke .4s ease; }
+.gauge-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 700;
+  transform: none;
+}
+.gauge-label {
+  margin-top: .75rem;
+  font-size: .85rem;
+  color: #a1a1aa;
+}
+
+/* ---- Connection badge ---- */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .8rem;
+  padding: .35rem .7rem;
+  border-radius: 999px;
+  background: #1e1e26;
+  border: 1px solid #27272a;
+  margin-bottom: 1rem;
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+.status-dot.connected { background: #22c55e; }
+
+/* ---- Event log ---- */
+.log-box {
+  height: 180px;
+  overflow-y: auto;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: .75rem;
+  line-height: 1.7;
+  color: #a1a1aa;
+  padding: .5rem;
+  background: #13141b;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+}
+.log-box .log-entry { padding: .1rem 0; }
+.log-box .log-entry span.time { color: #6366f1; margin-right: .5rem; }
+
+/* ---- Responsive ---- */
+@media (max-width: 720px) {
+  .container { grid-template-columns: 1fr; }
+}
