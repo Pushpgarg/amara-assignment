@@ -99,3 +99,31 @@ window.addEventListener("blur", () => {
 // ---- Boot ----
 initCamera();
 connectWS();
+
+// ---- Frame Extraction & Transmission ----
+
+const captureCanvas = document.createElement("canvas");
+const captureCtx = captureCanvas.getContext("2d");
+const videoElement = document.getElementById("cam");
+
+// Capture and send a frame every 1 second (1000 ms)
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+    
+    // Match the canvas size to the video stream
+    captureCanvas.width = videoElement.videoWidth;
+    captureCanvas.height = videoElement.videoHeight;
+    
+    // Draw the current video frame onto the canvas
+    captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+    
+    // Convert the canvas to a lightweight JPEG Base64 string (quality: 0.5)
+    const base64Image = captureCanvas.toDataURL("image/jpeg", 0.5);
+    
+    // Send it to the Python server
+    ws.send(JSON.stringify({
+      event: "frame",
+      image: base64Image
+    }));
+  }
+}, 1000);
