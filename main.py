@@ -49,6 +49,10 @@ async def websocket_endpoint(ws: WebSocket):
     TALKING_VARIANCE_THRESHOLD = 0.015  # How much the mouth must MOVE between frames
     YAWN_THRESHOLD = 0.15               # If ratio is larger than this, it's a yawn
     
+    # --- NEW: Head Pose Variables ---
+    PENALTY_LOOKING_AWAY = 5.0 # High continuous penalty for looking off-screen
+    HEAD_YAW_THRESHOLD = 7    # A ratio > 2.5 or < 0.4 triggers the penalty
+    
     try:
         while True:
             data = await ws.receive_text()
@@ -114,32 +118,40 @@ async def websocket_endpoint(ws: WebSocket):
                             if mesh_results.multi_face_landmarks:
                                 landmarks = mesh_results.multi_face_landmarks[0].landmark
                                 
-                                # --- UPGRADED: Temporal Lip Movement Math ---
+                                # --- 1. Temporal Lip Movement Math ---
                                 mouth_dist = landmarks[14].y - landmarks[13].y
                                 face_height = landmarks[152].y - landmarks[10].y
-                                
                                 current_mouth_ratio = mouth_dist / face_height if face_height > 0 else 0
-                                
-                                # Calculate the movement delta
                                 mouth_movement_delta = abs(current_mouth_ratio - previous_mouth_ratio)
                                 
-                                # --- THE FIX: The Yawn "Snap-Back" Filter ---
                                 is_currently_yawning = current_mouth_ratio > YAWN_THRESHOLD
                                 was_previously_yawning = previous_mouth_ratio > YAWN_THRESHOLD
-                                
-                                # If they are yawning now, OR just recovering from a yawn, ignore the movement
                                 is_yawn_motion = is_currently_yawning or was_previously_yawning
-                                
-                                # They are talking if lips move significantly AND it's not a yawn motion
                                 is_talking = (mouth_movement_delta > TALKING_VARIANCE_THRESHOLD) and not is_yawn_motion
-                                
-                                # Update memory for the next incoming frame
                                 previous_mouth_ratio = current_mouth_ratio
+
+                                # --- 2. NEW: Head Pose Math (Yaw Estimation) ---
+                                nose_x = landmarks[1].x
+                                left_edge_x = landmarks[234].x
+                                right_edge_x = landmarks[454].x
                                 
-                                # --- State Hierarchy ---
+                                # Distance from nose to either side of the face
+                                dist_left = abs(nose_x - left_edge_x)
+                                dist_right = abs(right_edge_x - nose_x)
+                                
+                                # Calculate ratio (add 0.001 to prevent division by zero)
+                                yaw_ratio = dist_left / max(dist_right, 0.001)
+                                
+                                # Check if ratio is extremely skewed
+                                is_looking_away = yaw_ratio > HEAD_YAW_THRESHOLD or yaw_ratio < (1 / HEAD_YAW_THRESHOLD)
+                                
+                                # --- 3. State Hierarchy ---
                                 if is_in_background:
                                     risk_score = min(100.0, risk_score + (PENALTY_BACKGROUND * time_scale))
                                     msg = "WARNING: Candidate is on another tab!"
+                                elif is_looking_away:
+                                    risk_score = min(100.0, risk_score + (PENALTY_LOOKING_AWAY * time_scale))
+                                    msg = f"WARNING: Looking away! (Yaw Ratio: {yaw_ratio:.2f})"
                                 elif is_talking:
                                     risk_score = min(100.0, risk_score + (PENALTY_TALKING * time_scale))
                                     msg = f"WARNING: Speaking detected! (Movement: {mouth_movement_delta:.3f})"
