@@ -1,3 +1,6 @@
+from curses.ascii import TAB
+from tkinter.tix import WINDOW
+
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -27,8 +30,15 @@ async def serve_index():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
-    risk_score = 0  
+    risk_score = 0.0  
+    is_in_background = False # Tracks if they are on another tab/app
     
+    # ⭐️ TUNING VARIABLES (Points per second) ⭐️
+    PENALTY_NO_FACE = 5.0      # Slower increase if face is missing
+    PENALTY_CROWD = 20.0       # Moderate increase for multiple people
+    DECAY_GOOD_BEHAVIOR = 0.5  # Very slow forgiveness rate
+    TAB_SWITCH_PENALTY = 20    # Immediate penalty for tab switching
+    WINDOW_BLUR_PENALTY = 10.0     # Penalty for losing window focus
     try:
         while True:
             data = await ws.receive_text()
@@ -36,27 +46,38 @@ async def websocket_endpoint(ws: WebSocket):
                 payload = json.loads(data)
                 event_type = payload.get("event")
 
+                # --- Browser Event State Management ---
                 if event_type == "tab_switch":
-                    risk_score = min(100, risk_score + 25)
+                    is_in_background = True
+                    risk_score = min(100.0, risk_score + TAB_SWITCH_PENALTY)
                     msg = "WARNING: Tab switch detected!"
                 elif event_type == "window_blur":
-                    risk_score = min(100, risk_score + 10)
+                    is_in_background = True
+                    risk_score = min(100.0, risk_score + WINDOW_BLUR_PENALTY)
                     msg = "WARNING: Window lost focus!"
+                elif event_type in ["tab_focus", "window_focus"]:
+                    is_in_background = False
+                    msg = "System: Candidate returned to interview."
+                    # Send a quick update to log their return
+                    response = {"status": "connected", "risk_score": risk_score, "message": msg}
+                    await ws.send_text(json.dumps(response))
+                    continue
                 elif event_type == "connected":
                     msg = "Monitoring started."
                 
                 # --- Vision Pipeline ---
                 elif event_type == "frame":
                     image_data = payload.get("image", "")
+                    frame_interval = payload.get("frame_interval", 1000)
+                    time_scale = frame_interval / 1000.0
+                    
                     if "," in image_data:
                         base64_str = image_data.split(",")[1]
                         img_bytes = base64.b64decode(base64_str)
                         np_arr = np.frombuffer(img_bytes, np.uint8)
                         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                        
                         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                         
-                        # Step 1: Always run fast face detection to count people
                         results_detection = face_detection.process(img_rgb)
                         face_count = 0
                         bounding_boxes = []
@@ -70,29 +91,21 @@ async def websocket_endpoint(ws: WebSocket):
                                     "width": bbox.width, "height": bbox.height
                                 })
                         
-                        # Apply Vision Rules & Determine Hybrid UI Payload
-                        # Apply Vision Rules & Determine Hybrid UI Payload
                         msg = "Normal behavior."
                         vision_data = []
                         vision_type = "none"
 
                         if face_count == 0:
-                            risk_score = min(100, risk_score + 10)
+                            risk_score = min(100.0, risk_score + (PENALTY_NO_FACE * time_scale))
                             msg = "WARNING: Candidate not found!"
                             
-                        elif face_count > 1:
-                            # Crowd detected! Fall back to bounding boxes
-                            risk_score = min(100, risk_score + 25)
-                            msg = f"WARNING: {face_count} faces detected!"
-                            vision_data = bounding_boxes
-                            vision_type = "boxes"
-
                         elif face_count == 1:
-                            # --- THE FIX: Candidate is alone. Reduce the risk score! ---
-                            if risk_score > 0:
-                                risk_score = max(0, risk_score - 1)
+                            # ⭐️ THE FIX: Only decay if they are alone AND actively on the interview tab
+                            if risk_score > 0 and not is_in_background:
+                                risk_score = max(0.0, risk_score - (DECAY_GOOD_BEHAVIOR * time_scale))
+                            elif is_in_background:
+                                msg = "WARNING: Candidate is on another tab!"
                                 
-                            # Run deep FaceMesh analysis
                             mesh_results = face_mesh.process(img_rgb)
                             if mesh_results.multi_face_landmarks:
                                 for landmark in mesh_results.multi_face_landmarks[0].landmark:
@@ -100,21 +113,17 @@ async def websocket_endpoint(ws: WebSocket):
                             vision_type = "mesh"
                             
                         elif face_count > 1:
-                            # Step 3: Crowd detected! Fall back to bounding boxes
-                            risk_score = min(100, risk_score + 25)
+                            risk_score = min(100.0, risk_score + (PENALTY_CROWD * time_scale))
                             msg = f"WARNING: {face_count} faces detected!"
                             vision_data = bounding_boxes
                             vision_type = "boxes"
-                            
-                        elif risk_score > 0:
-                            risk_score = max(0, risk_score - 1) 
 
                         response = {
                             "status": "connected",
                             "risk_score": risk_score,
                             "message": msg,
                             "vision_data": vision_data,
-                            "vision_type": vision_type, # Tell frontend what to draw
+                            "vision_type": vision_type,
                             "type": "vision_update"
                         }
                         await ws.send_text(json.dumps(response))
@@ -122,11 +131,7 @@ async def websocket_endpoint(ws: WebSocket):
                 else:
                     msg = "Unknown event logged."
 
-                response = {
-                    "status": "connected",
-                    "risk_score": risk_score,
-                    "message": msg,
-                }
+                response = {"status": "connected", "risk_score": risk_score, "message": msg}
                 await ws.send_text(json.dumps(response))
                 
             except json.JSONDecodeError:
@@ -137,4 +142,3 @@ async def websocket_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
-    

@@ -20,7 +20,8 @@ function log(msg) {
 
 function setRisk(score) {
   const clamped = Math.max(0, Math.min(100, score));
-  riskValue.textContent = clamped;
+  // Round the score for clean UI display (hides decimals)
+  riskValue.textContent = Math.round(clamped); 
   const offset = CIRCUMFERENCE - (clamped / 100) * CIRCUMFERENCE;
   gaugeFill.style.strokeDashoffset = offset;
 
@@ -49,22 +50,20 @@ function connectWS() {
     statusDot.classList.add("connected");
     statusTxt.textContent = "Connected";
     log("WebSocket connected to server");
-    // UPDATED: Sending JSON instead of plain text
     ws.send(JSON.stringify({ event: "connected" }));
   });
 
-ws.addEventListener("message", (event) => {
+  ws.addEventListener("message", (event) => {
     try {
       const data = JSON.parse(event.data);
       
       setRisk(data.risk_score);
       
-      if (data.message.includes("WARNING")) {
+      if (data.message.includes("WARNING") || data.message.includes("System:")) {
           log("Server: " + data.message);
       }
 
       if (data.type === "vision_update" && data.vision_data) {
-          // Pass both the data and the type (mesh vs boxes)
           drawVision(data.vision_data, data.vision_type); 
       }
       
@@ -87,22 +86,27 @@ ws.addEventListener("message", (event) => {
 
 // ---- Browser Event Proctoring ----
 
-// 1. Detect if the user switches tabs or minimizes the browser
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    // The user can't see the page anymore!
-    if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    if (document.hidden) {
       ws.send(JSON.stringify({ event: "tab_switch" }));
+    } else {
+      // Tell Python we are back
+      ws.send(JSON.stringify({ event: "tab_focus" }));
     }
-  } else {
-    log("System: User returned to the interview tab.");
   }
 });
 
-// 2. Detect if the user clicks outside the window (e.g., opening a notes app)
 window.addEventListener("blur", () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ event: "window_blur" }));
+  }
+});
+
+window.addEventListener("focus", () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    // Tell Python the window is active again
+    ws.send(JSON.stringify({ event: "window_focus" }));
   }
 });
 
@@ -116,27 +120,24 @@ const captureCanvas = document.createElement("canvas");
 const captureCtx = captureCanvas.getContext("2d");
 const videoElement = document.getElementById("cam");
 
-// Capture and send a frame every 1 second (1000 ms)
+// ⭐️ Central Control: Change this value to automatically scale penalties
+const FRAME_INTERVAL = 250; // 250ms = 4 FPS. Set to 1000 for 1 FPS.
+
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN && videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
     
-    // Match the canvas size to the video stream
     captureCanvas.width = videoElement.videoWidth;
     captureCanvas.height = videoElement.videoHeight;
-    
-    // Draw the current video frame onto the canvas
     captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
-    
-    // Convert the canvas to a lightweight JPEG Base64 string (quality: 0.5)
     const base64Image = captureCanvas.toDataURL("image/jpeg", 0.5);
     
-    // Send it to the Python server
     ws.send(JSON.stringify({
       event: "frame",
-      image: base64Image
+      image: base64Image,
+      frame_interval: FRAME_INTERVAL // Send the current speed to Python
     }));
   }
-}, 250);
+}, FRAME_INTERVAL);
 
 // ---- AI Vision Overlay ----
 
@@ -149,7 +150,6 @@ let showVision = false;
 aiToggle.addEventListener("change", (e) => {
   showVision = e.target.checked;
   if (!showVision) {
-    // Clear the canvas when turned off
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   }
 });
@@ -181,7 +181,6 @@ function drawVision(visionData, visionType) {
       const x = point.x * overlayCanvas.width;
       const y = point.y * overlayCanvas.height;
       
-      // Draw a tiny dot for each facial landmark
       overlayCtx.beginPath();
       overlayCtx.arc(x, y, 1.5, 0, 2 * Math.PI);
       overlayCtx.fill();
