@@ -31,17 +31,24 @@ async def serve_index():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     risk_score = 0.0  
-    is_in_background = False # Tracks if they are on another tab/app
+    is_in_background = False 
+    
+    # --- NEW: State Memory for Video Frames ---
+    previous_mouth_ratio = 0.0 
     
     # ⭐️ TUNING VARIABLES (Points per second) ⭐️
-    PENALTY_NO_FACE = 5.0      # Slower increase if face is missing
-    PENALTY_CROWD = 10.0       # Moderate increase for multiple people
-    DECAY_GOOD_BEHAVIOR = 0.5  # Very slow forgiveness rate
-    TAB_SWITCH_PENALTY = 5    # Immediate penalty for tab switching
-    WINDOW_BLUR_PENALTY = 5.0     # Penalty for losing window focus
+    PENALTY_NO_FACE = 5.0      
+    PENALTY_CROWD = 10.0       
+    DECAY_GOOD_BEHAVIOR = 0.5  
+    TAB_SWITCH_PENALTY = 5    
+    WINDOW_BLUR_PENALTY = 5.0     
     PENALTY_BACKGROUND = 10.0
-    PENALTY_TALKING = 10.0      # Continuous penalty for speaking
-    TALKING_THRESHOLD = 0.03    # Ratio of mouth opening to face height (0.03+ usually means talking)
+    
+    # --- UPGRADED: Lip Movement Variables ---
+    PENALTY_TALKING = 5.0      
+    TALKING_VARIANCE_THRESHOLD = 0.015  # How much the mouth must MOVE between frames
+    YAWN_THRESHOLD = 0.15               # If ratio is larger than this, it's a yawn
+    
     try:
         while True:
             data = await ws.receive_text()
@@ -61,7 +68,6 @@ async def websocket_endpoint(ws: WebSocket):
                 elif event_type in ["tab_focus", "window_focus"]:
                     is_in_background = False
                     msg = "System: Candidate returned to interview."
-                    # Send a quick update to log their return
                     response = {"status": "connected", "risk_score": risk_score, "message": msg}
                     await ws.send_text(json.dumps(response))
                     continue
@@ -108,15 +114,27 @@ async def websocket_endpoint(ws: WebSocket):
                             if mesh_results.multi_face_landmarks:
                                 landmarks = mesh_results.multi_face_landmarks[0].landmark
                                 
-                                # --- NEW: Lip Movement Math ---
-                                # 13 is inner top lip, 14 is inner bottom lip
-                                # 10 is top of head, 152 is bottom of chin
+                                # --- UPGRADED: Temporal Lip Movement Math ---
                                 mouth_dist = landmarks[14].y - landmarks[13].y
                                 face_height = landmarks[152].y - landmarks[10].y
                                 
-                                # Prevent division by zero just in case
-                                mouth_ratio = mouth_dist / face_height if face_height > 0 else 0
-                                is_talking = mouth_ratio > TALKING_THRESHOLD
+                                current_mouth_ratio = mouth_dist / face_height if face_height > 0 else 0
+                                
+                                # Calculate the movement delta
+                                mouth_movement_delta = abs(current_mouth_ratio - previous_mouth_ratio)
+                                
+                                # --- THE FIX: The Yawn "Snap-Back" Filter ---
+                                is_currently_yawning = current_mouth_ratio > YAWN_THRESHOLD
+                                was_previously_yawning = previous_mouth_ratio > YAWN_THRESHOLD
+                                
+                                # If they are yawning now, OR just recovering from a yawn, ignore the movement
+                                is_yawn_motion = is_currently_yawning or was_previously_yawning
+                                
+                                # They are talking if lips move significantly AND it's not a yawn motion
+                                is_talking = (mouth_movement_delta > TALKING_VARIANCE_THRESHOLD) and not is_yawn_motion
+                                
+                                # Update memory for the next incoming frame
+                                previous_mouth_ratio = current_mouth_ratio
                                 
                                 # --- State Hierarchy ---
                                 if is_in_background:
@@ -124,12 +142,10 @@ async def websocket_endpoint(ws: WebSocket):
                                     msg = "WARNING: Candidate is on another tab!"
                                 elif is_talking:
                                     risk_score = min(100.0, risk_score + (PENALTY_TALKING * time_scale))
-                                    msg = "WARNING: Speaking/Lip movement detected!"
+                                    msg = f"WARNING: Speaking detected! (Movement: {mouth_movement_delta:.3f})"
                                 elif risk_score > 0:
-                                    # Only decay if they are alone, focused, AND quiet
                                     risk_score = max(0.0, risk_score - (DECAY_GOOD_BEHAVIOR * time_scale))
                                     
-                                # Extract points to draw the green mesh on the frontend
                                 for landmark in landmarks:
                                     vision_data.append({"x": landmark.x, "y": landmark.y})
                             
