@@ -37,8 +37,9 @@ async def websocket_endpoint(ws: WebSocket):
     PENALTY_NO_FACE = 5.0      # Slower increase if face is missing
     PENALTY_CROWD = 20.0       # Moderate increase for multiple people
     DECAY_GOOD_BEHAVIOR = 0.5  # Very slow forgiveness rate
-    TAB_SWITCH_PENALTY = 20    # Immediate penalty for tab switching
+    TAB_SWITCH_PENALTY = 10    # Immediate penalty for tab switching
     WINDOW_BLUR_PENALTY = 10.0     # Penalty for losing window focus
+    PENALTY_BACKGROUND = 20.0
     try:
         while True:
             data = await ws.receive_text()
@@ -100,11 +101,13 @@ async def websocket_endpoint(ws: WebSocket):
                             msg = "WARNING: Candidate not found!"
                             
                         elif face_count == 1:
-                            # ⭐️ THE FIX: Only decay if they are alone AND actively on the interview tab
-                            if risk_score > 0 and not is_in_background:
-                                risk_score = max(0.0, risk_score - (DECAY_GOOD_BEHAVIOR * time_scale))
-                            elif is_in_background:
+                            if is_in_background:
+                                # Candidate is actively cheating on another tab/app
+                                risk_score = min(100.0, risk_score + (PENALTY_BACKGROUND * time_scale))
                                 msg = "WARNING: Candidate is on another tab!"
+                            elif risk_score > 0:
+                                # Candidate is alone and focused on the interview
+                                risk_score = max(0.0, risk_score - (DECAY_GOOD_BEHAVIOR * time_scale))
                                 
                             mesh_results = face_mesh.process(img_rgb)
                             if mesh_results.multi_face_landmarks:
