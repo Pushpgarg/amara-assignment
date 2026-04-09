@@ -1,6 +1,3 @@
-from curses.ascii import TAB
-from tkinter.tix import WINDOW
-
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -19,9 +16,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 mp_face_detection = mp.solutions.face_detection
 face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
 
-# 2. FaceMesh Detector (Heavy, extracts 468 points)
+# 2. FaceMesh Detector (Heavy, extracts 468 points + Iris)
 mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=False, 
+    max_num_faces=1, 
+    min_detection_confidence=0.5, 
+    refine_landmarks=True  # Enables Iris Tracking
+)
 
 @app.get("/")
 async def serve_index():
@@ -30,11 +32,12 @@ async def serve_index():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
+    
+    # --- State Memory Variables ---
     risk_score = 0.0  
     is_in_background = False 
-    
-    # --- NEW: State Memory for Video Frames ---
     previous_mouth_ratio = 0.0 
+    gaze_history = []  # Array to store the last 30 frames of eye positions
     
     # ⭐️ TUNING VARIABLES (Points per second) ⭐️
     PENALTY_NO_FACE = 5.0      
@@ -44,14 +47,16 @@ async def websocket_endpoint(ws: WebSocket):
     WINDOW_BLUR_PENALTY = 5.0     
     PENALTY_BACKGROUND = 10.0
     
-    # --- UPGRADED: Lip Movement Variables ---
-    PENALTY_TALKING = 5.0      
-    TALKING_VARIANCE_THRESHOLD = 0.015  # How much the mouth must MOVE between frames
-    YAWN_THRESHOLD = 0.15               # If ratio is larger than this, it's a yawn
+    PENALTY_TALKING = 5.0    
+    TALKING_VARIANCE_THRESHOLD = 0.015  
+    YAWN_THRESHOLD = 0.15               
     
-    # --- NEW: Head Pose Variables ---
-    PENALTY_LOOKING_AWAY = 5.0 # High continuous penalty for looking off-screen
-    HEAD_YAW_THRESHOLD = 7    # A ratio > 2.5 or < 0.4 triggers the penalty
+    PENALTY_LOOKING_AWAY = 5.0 
+    HEAD_YAW_THRESHOLD = 4    
+    
+    # --- NEW: Reading Variables ---
+    PENALTY_READING = 15.0
+    READING_VARIANCE_THRESHOLD = 0.0015  # Variance needed to trigger reading penalty
     
     try:
         while True:
@@ -91,6 +96,7 @@ async def websocket_endpoint(ws: WebSocket):
                         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                         
+                        # 1. Detect number of faces
                         results_detection = face_detection.process(img_rgb)
                         face_count = 0
                         bounding_boxes = []
@@ -107,6 +113,7 @@ async def websocket_endpoint(ws: WebSocket):
                         msg = "Normal behavior."
                         vision_data = []
                         vision_type = "none"
+                        variance = 0.0
 
                         if face_count == 0:
                             risk_score = min(100.0, risk_score + (PENALTY_NO_FACE * time_scale))
@@ -118,7 +125,7 @@ async def websocket_endpoint(ws: WebSocket):
                             if mesh_results.multi_face_landmarks:
                                 landmarks = mesh_results.multi_face_landmarks[0].landmark
                                 
-                                # --- 1. Temporal Lip Movement Math ---
+                                # --- Feature 1: Lip Movement Math ---
                                 mouth_dist = landmarks[14].y - landmarks[13].y
                                 face_height = landmarks[152].y - landmarks[10].y
                                 current_mouth_ratio = mouth_dist / face_height if face_height > 0 else 0
@@ -130,28 +137,43 @@ async def websocket_endpoint(ws: WebSocket):
                                 is_talking = (mouth_movement_delta > TALKING_VARIANCE_THRESHOLD) and not is_yawn_motion
                                 previous_mouth_ratio = current_mouth_ratio
 
-                                # --- 2. NEW: Head Pose Math (Yaw Estimation) ---
+                                # --- Feature 2: Head Pose Math (Yaw Estimation) ---
                                 nose_x = landmarks[1].x
                                 left_edge_x = landmarks[234].x
                                 right_edge_x = landmarks[454].x
-                                
-                                # Distance from nose to either side of the face
                                 dist_left = abs(nose_x - left_edge_x)
                                 dist_right = abs(right_edge_x - nose_x)
-                                
-                                # Calculate ratio (add 0.001 to prevent division by zero)
                                 yaw_ratio = dist_left / max(dist_right, 0.001)
-                                
-                                # Check if ratio is extremely skewed
                                 is_looking_away = yaw_ratio > HEAD_YAW_THRESHOLD or yaw_ratio < (1 / HEAD_YAW_THRESHOLD)
                                 
-                                # --- 3. State Hierarchy ---
+                                # --- Feature 3: Iris Tracking (Reading Detection) ---
+                                eye_openness = abs(landmarks[159].y - landmarks[145].y)
+                                is_blinking = eye_openness < 0.015
+                                is_reading = False
+                                
+                                if not is_blinking:
+                                    eye_width = abs(landmarks[133].x - landmarks[33].x)
+                                    pupil_pos = abs(landmarks[468].x - landmarks[33].x)
+                                    gaze_ratio = pupil_pos / max(eye_width, 0.001)
+                                    gaze_history.append(gaze_ratio)
+                                    
+                                    # Keep only the last 30 frames
+                                    if len(gaze_history) > 30:
+                                        gaze_history.pop(0)
+                                        variance = np.var(gaze_history)
+                                        if variance > READING_VARIANCE_THRESHOLD and not is_looking_away:
+                                            is_reading = True
+                                
+                                # --- State Hierarchy (Apply Penalties) ---
                                 if is_in_background:
                                     risk_score = min(100.0, risk_score + (PENALTY_BACKGROUND * time_scale))
                                     msg = "WARNING: Candidate is on another tab!"
                                 elif is_looking_away:
                                     risk_score = min(100.0, risk_score + (PENALTY_LOOKING_AWAY * time_scale))
                                     msg = f"WARNING: Looking away! (Yaw Ratio: {yaw_ratio:.2f})"
+                                elif is_reading:
+                                    risk_score = min(100.0, risk_score + (PENALTY_READING * time_scale))
+                                    msg = f"WARNING: Hidden screen reading detected! (Var: {variance:.5f})"
                                 elif is_talking:
                                     risk_score = min(100.0, risk_score + (PENALTY_TALKING * time_scale))
                                     msg = f"WARNING: Speaking detected! (Movement: {mouth_movement_delta:.3f})"
