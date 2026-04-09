@@ -37,16 +37,19 @@ async def websocket_endpoint(ws: WebSocket):
 
                 if event_type == "tab_switch":
                     is_in_background = True
-                    engine.risk_score = min(100.0, engine.risk_score + TAB_SWITCH_PENALTY)
+                    # FIX: Updated to engine.risk.risk_score
+                    engine.risk.risk_score = min(100.0, engine.risk.risk_score + TAB_SWITCH_PENALTY)
                     msg = "WARNING: Tab switch detected!"
                 elif event_type == "window_blur":
                     is_in_background = True
-                    engine.risk_score = min(100.0, engine.risk_score + WINDOW_BLUR_PENALTY)
+                    # FIX: Updated to engine.risk.risk_score
+                    engine.risk.risk_score = min(100.0, engine.risk.risk_score + WINDOW_BLUR_PENALTY)
                     msg = "WARNING: Window lost focus!"
                 elif event_type in ["tab_focus", "window_focus"]:
                     is_in_background = False
                     msg = "System: Candidate returned to interview."
-                    response = {"status": "connected", "risk_score": engine.risk_score, "message": msg}
+                    # FIX: Updated to engine.risk.risk_score
+                    response = {"status": "connected", "risk_score": engine.risk.risk_score, "message": msg}
                     await ws.send_text(json.dumps(response))
                     continue
                 elif event_type == "connected":
@@ -80,7 +83,8 @@ async def websocket_endpoint(ws: WebSocket):
                 else:
                     msg = "Unknown event logged."
 
-                response = {"status": "connected", "risk_score": engine.risk_score, "message": msg}
+                # FIX: Updated to engine.risk.risk_score
+                response = {"status": "connected", "risk_score": engine.risk.risk_score, "message": msg}
                 await ws.send_text(json.dumps(response))
                 
             except json.JSONDecodeError:
