@@ -20,6 +20,8 @@ class ProctorEngine:
         self.risk_score = 0.0
         self.previous_mouth_ratio = 0.0
         self.gaze_history = []
+        self.previous_nose = None
+        self.reading_violation_count = 0 # <--- NEW: Track total offenses
         
         # --- Tuning Variables ---
         self.PENALTY_NO_FACE = 5.0      
@@ -36,6 +38,8 @@ class ProctorEngine:
         
         self.PENALTY_READING = 15.0
         self.READING_VARIANCE_THRESHOLD = 0.0015
+        
+        self.HEAD_MOTION_THRESHOLD = 0.04 # How fast the head can move before we pause detection
 
     def process_frame(self, img_rgb, time_scale, is_in_background):
         results_detection = self.face_detection.process(img_rgb)
@@ -66,6 +70,20 @@ class ProctorEngine:
             if mesh_results.multi_face_landmarks:
                 landmarks = mesh_results.multi_face_landmarks[0].landmark
                 
+                # --- NEW: Head Velocity Filter ---
+                nose_x = landmarks[1].x
+                nose_y = landmarks[1].y
+                
+                is_head_moving_fast = False
+                if self.previous_nose:
+                    # Calculate how far the nose moved since the last frame
+                    nose_dist = np.sqrt((nose_x - self.previous_nose['x'])**2 + (nose_y - self.previous_nose['y'])**2)
+                    if nose_dist > self.HEAD_MOTION_THRESHOLD:
+                        is_head_moving_fast = True
+                        
+                # Save current nose position for the next frame
+                self.previous_nose = {'x': nose_x, 'y': nose_y}
+
                 # --- 1. Lip Movement ---
                 mouth_dist = landmarks[14].y - landmarks[13].y
                 face_height = landmarks[152].y - landmarks[10].y
@@ -75,11 +93,12 @@ class ProctorEngine:
                 is_currently_yawning = current_mouth_ratio > self.YAWN_THRESHOLD
                 was_previously_yawning = self.previous_mouth_ratio > self.YAWN_THRESHOLD
                 is_yawn_motion = is_currently_yawning or was_previously_yawning
-                is_talking = (mouth_movement_delta > self.TALKING_VARIANCE_THRESHOLD) and not is_yawn_motion
+                
+                # Cannot be talking if the head is actively whipping around
+                is_talking = (mouth_movement_delta > self.TALKING_VARIANCE_THRESHOLD) and not is_yawn_motion and not is_head_moving_fast
                 self.previous_mouth_ratio = current_mouth_ratio
 
                 # --- 2. Head Pose ---
-                nose_x = landmarks[1].x
                 left_edge_x = landmarks[234].x
                 right_edge_x = landmarks[454].x
                 dist_left = abs(nose_x - left_edge_x)
@@ -88,10 +107,12 @@ class ProctorEngine:
                 is_looking_away = yaw_ratio > self.HEAD_YAW_THRESHOLD or yaw_ratio < (1 / self.HEAD_YAW_THRESHOLD)
                 
                 # --- 3. Iris Tracking ---
+                # --- 3. Iris Tracking ---
                 eye_openness = abs(landmarks[159].y - landmarks[145].y)
                 is_blinking = eye_openness < 0.015
                 is_reading = False
                 
+                # FIX: ALWAYS record the eye position if they are not blinking
                 if not is_blinking:
                     eye_width = abs(landmarks[133].x - landmarks[33].x)
                     pupil_pos = abs(landmarks[468].x - landmarks[33].x)
@@ -101,8 +122,12 @@ class ProctorEngine:
                     if len(self.gaze_history) > 30:
                         self.gaze_history.pop(0)
                         variance = np.var(self.gaze_history)
-                        if variance > self.READING_VARIANCE_THRESHOLD and not is_looking_away:
+                        
+                        # Only trigger the reading penalty if the head is relatively still
+                        if variance > self.READING_VARIANCE_THRESHOLD and not is_looking_away and not is_head_moving_fast:
                             is_reading = True
+                            # Flush the buffer so the penalty doesn't skyrocket!
+                            self.gaze_history.clear() 
                 
                 # --- 4. State Hierarchy ---
                 if is_in_background:
@@ -112,14 +137,20 @@ class ProctorEngine:
                     self.risk_score = min(100.0, self.risk_score + (self.PENALTY_LOOKING_AWAY * time_scale))
                     msg = f"WARNING: Looking away! (Yaw Ratio: {yaw_ratio:.2f})"
                 elif is_reading:
-                    self.risk_score = min(100.0, self.risk_score + (self.PENALTY_READING * time_scale))
-                    msg = f"WARNING: Hidden screen reading detected! (Var: {variance:.5f})"
+                    # Increment the offense counter
+                    self.reading_violation_count += 1
+                    
+                    # Scale the penalty based on how many times they've been caught
+                    scaled_penalty = self.PENALTY_READING * self.reading_violation_count
+                    
+                    self.risk_score = min(100.0, self.risk_score + (scaled_penalty * time_scale))
+                    msg = f"WARNING: Screen reading! (Offense #{self.reading_violation_count})"
                 elif is_talking:
                     self.risk_score = min(100.0, self.risk_score + (self.PENALTY_TALKING * time_scale))
                     msg = f"WARNING: Speaking detected! (Movement: {mouth_movement_delta:.3f})"
                 elif self.risk_score > 0:
                     self.risk_score = max(0.0, self.risk_score - (self.DECAY_GOOD_BEHAVIOR * time_scale))
-                    
+    
                 for landmark in landmarks:
                     vision_data.append({"x": landmark.x, "y": landmark.y})
             
