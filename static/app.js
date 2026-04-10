@@ -40,7 +40,7 @@ const LABEL_MAP = {
 };
 
 // ---- Frame rate: 12 FPS (83ms interval) ----
-const FRAME_INTERVAL = 83;
+const FRAME_INTERVAL = 125;
 
 // ---- Helpers ----
 function log(msg) {
